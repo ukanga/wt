@@ -213,8 +213,21 @@ navigation over pane navigation.
 - 3 windows: `agent`, `shell`, `edit`
 
 Session names default to `wt-<worktree>` (configurable via
-`session_prefix`). `wt session ls` lists the matching sessions with their
-agent-window status; `wt session rm <name>` kills the whole session.
+`session_prefix`). `wt session` opens a picker across your live
+worktree sessions and enters the one you choose. `wt session ls` lists
+those sessions with their agent-window status; `wt session rm <name>`
+kills the whole session and drops its state entry.
+
+`wt` records each windows-mode session in `~/.wt/sessions.json` when you
+run `wt session add`, so discovery (`ls`, `session` picker) is driven by
+that stored list — not by tmux session-name patterns. The file is
+self-healing: stale entries whose tmux session has been killed externally
+are pruned on read.
+
+Because discovery is state-backed, setting `session_prefix = ""` only
+changes the session naming (the session name becomes the bare worktree
+name). It does not cause `wt session ls` to pick up unrelated tmux
+sessions — only sessions that `wt session add` created are tracked.
 
 `wt session watch` and the `--watch` flag are currently panes-mode only.
 
