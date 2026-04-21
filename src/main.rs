@@ -500,7 +500,7 @@ fn cmd_session_attach(tmux: &TmuxManager) -> Result<()> {
         return Ok(());
     }
 
-    tmux.attach()?;
+    tmux.enter()?;
     Ok(())
 }
 
@@ -602,11 +602,11 @@ fn cmd_session_add(
     state.save()?;
 
     if inside_session {
-        // Already inside, just switch to the window
+        // Already inside the wt session — just switch to the window.
         tmux.select_window(name)?;
     } else {
-        eprintln!("Attaching to session...");
-        tmux.attach()?;
+        eprintln!("Entering session...");
+        tmux.enter()?;
     }
 
     Ok(())
