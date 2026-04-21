@@ -124,6 +124,56 @@ impl TmuxManager {
         Ok(())
     }
 
+    /// Enter the session: `attach-session` when outside tmux, `switch-client`
+    /// when already inside another tmux session (attach would nest and fail).
+    pub fn enter(&self) -> Result<()> {
+        if Self::is_inside_tmux() {
+            let status = Command::new("tmux")
+                .args(["switch-client", "-t", &self.session_name])
+                .status()
+                .context("Failed to switch tmux client")?;
+            if !status.success() {
+                anyhow::bail!("Failed to switch client to session '{}'", self.session_name);
+            }
+            Ok(())
+        } else {
+            self.attach()
+        }
+    }
+
+    /// Kill the whole session (used by windows mode to remove a worktree).
+    pub fn kill_session(&self) -> Result<()> {
+        let output = Command::new("tmux")
+            .args(["kill-session", "-t", &self.session_name])
+            .output()
+            .context("Failed to kill tmux session")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to kill session: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    /// List all tmux session names whose names start with `prefix`.
+    /// Returns an empty vec when tmux has no running server.
+    pub fn list_sessions_with_prefix(prefix: &str) -> Result<Vec<String>> {
+        let output = Command::new("tmux")
+            .args(["list-sessions", "-F", "#{session_name}"])
+            .output()
+            .context("Failed to list tmux sessions")?;
+
+        if !output.status.success() {
+            // No server running is not an error — just no sessions.
+            return Ok(vec![]);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_session_names(&stdout, prefix))
+    }
+
     /// Create a new window in the session
     pub fn create_window(&self, name: &str, cwd: &Path) -> Result<u32> {
         let output = Command::new("tmux")
@@ -392,10 +442,49 @@ impl TmuxManager {
         Ok(())
     }
 
+    /// Setup a per-worktree session's windows (windows mode).
+    ///
+    /// Assumes the session was just created with a single initial window named
+    /// `agent` via `create_session("agent", cwd)`. Adds a `shell` window
+    /// (plain prompt) and, when `panes == 3`, an `edit` window running the
+    /// configured editor. Sends `agent_cmd` to the agent window. Focus lands
+    /// on `shell`, matching the initial focus in panes mode.
+    pub fn setup_worktree_windows(
+        &self,
+        cwd: &Path,
+        panes: u8,
+        config: &SessionConfig,
+    ) -> Result<()> {
+        // Launch the agent in the already-created `agent` window.
+        self.send_keys("agent", 0, &config.agent_cmd)?;
+
+        // Always add a plain shell window.
+        self.create_window("shell", cwd)?;
+
+        if panes == 3 {
+            self.create_window("edit", cwd)?;
+            self.send_keys("edit", 0, &config.editor_cmd)?;
+        }
+
+        // Land the user on the shell window by default.
+        self.select_window("shell")?;
+        Ok(())
+    }
+
     /// Get session name
     pub fn session_name(&self) -> &str {
         &self.session_name
     }
+}
+
+/// Filter tmux `list-sessions` output (one session name per line) to those
+/// beginning with `prefix`. Extracted for unit testing.
+fn parse_session_names(output: &str, prefix: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter(|line| line.starts_with(prefix))
+        .map(|line| line.to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -415,5 +504,38 @@ mod tests {
     fn test_manager_creation() {
         let manager = TmuxManager::new("test-session");
         assert_eq!(manager.session_name(), "test-session");
+    }
+
+    #[test]
+    fn test_parse_session_names_filters_by_prefix() {
+        let out = "main\nwt-foo\nwt-bar\nnotes\n";
+        assert_eq!(
+            parse_session_names(out, "wt-"),
+            vec!["wt-foo".to_string(), "wt-bar".to_string()],
+        );
+    }
+
+    #[test]
+    fn test_parse_session_names_empty_prefix_returns_all() {
+        let out = "main\nwt-foo\nnotes\n";
+        assert_eq!(
+            parse_session_names(out, ""),
+            vec![
+                "main".to_string(),
+                "wt-foo".to_string(),
+                "notes".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_parse_session_names_empty_input() {
+        assert!(parse_session_names("", "wt-").is_empty());
+    }
+
+    #[test]
+    fn test_parse_session_names_no_matches() {
+        let out = "main\nnotes\n";
+        assert!(parse_session_names(out, "wt-").is_empty());
     }
 }
