@@ -448,9 +448,7 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
     match action {
         None => match wt_config.session.mode {
             SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
-            SessionMode::Windows => {
-                anyhow::bail!("windows mode attach not yet implemented")
-            }
+            SessionMode::Windows => cmd_session_attach_windows(),
         },
         Some(SessionAction::Ls) => match wt_config.session.mode {
             SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
@@ -697,6 +695,49 @@ fn persist_windows_session(
     wt::session::retain_live_sessions(&mut state.windows_sessions, &live);
 
     state.save()
+}
+
+fn cmd_session_attach_windows() -> Result<()> {
+    let Some(mut state) = SessionState::load()? else {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+        return Ok(());
+    };
+
+    let live = TmuxManager::live_session_names().unwrap_or_default();
+    wt::session::retain_live_sessions(&mut state.windows_sessions, &live);
+    state.save()?;
+
+    if state.windows_sessions.is_empty() {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+        return Ok(());
+    }
+
+    let mut entries: Vec<(&String, &wt::session::WindowsSessionInfo)> =
+        state.windows_sessions.iter().collect();
+    entries.sort_by(|a, b| a.1.session_name.cmp(&b.1.session_name));
+
+    // Non-interactive: print and exit.
+    if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        for (_, info) in &entries {
+            println!("{}", info.session_name);
+        }
+        return Ok(());
+    }
+
+    let items: Vec<String> = entries
+        .iter()
+        .map(|(_, info)| info.session_name.clone())
+        .chain(std::iter::once("← cancel".to_string()))
+        .collect();
+
+    eprintln!("Select worktree session:");
+    let selection = Select::new().items(&items).default(0).interact()?;
+    if items[selection] == "← cancel" {
+        return Ok(());
+    }
+
+    let tmux = TmuxManager::new(&items[selection]);
+    tmux.enter()
 }
 
 fn cmd_session_ls_windows() -> Result<()> {
