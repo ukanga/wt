@@ -128,8 +128,9 @@ wt session                Attach to tmux session (see Session Mode)
 wt session ls             List workspaces in session (with agent status)
 wt session add <name>     Add workspace to session
       [-b base]           base: defaults to main
-      [--panes 2|3]       override pane count
-      [--watch]           add status window with live agent status
+      [--panes 2|3]       override pane count (panes mode) / window count (windows mode)
+      [--watch]           add status window with live agent status (panes mode only)
+      [--mode panes|windows]  override session layout mode for this invocation
 wt session rm <name>      Remove workspace from session
 wt session watch [-i N]   Live status dashboard (or use --watch above)
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
@@ -172,9 +173,16 @@ wt session add feature/auth --watch
 
 Or run `wt session watch` manually in any pane.
 
-### Pane Layouts
+### Layout modes
 
-**2 panes (default):**
+`wt` supports two tmux layouts — pick whichever matches your workflow.
+
+#### Panes mode (default)
+
+All worktrees live in one shared tmux session named `wt`, one window per
+worktree, split into 2 or 3 panes:
+
+**2 panes:**
 ```
 +---------------------------+---------------------------+
 |                           |                           |
@@ -195,18 +203,38 @@ Or run `wt session watch` manually in any pane.
 +---------------------------+---------------------------+
 ```
 
+#### Windows mode
+
+Each worktree gets its own tmux session with one window per role — useful
+on narrow screens where pane splits are cramped, or when you prefer window
+navigation over pane navigation.
+
+- 2 windows: `agent`, `shell`
+- 3 windows: `agent`, `shell`, `edit`
+
+Session names default to `wt-<worktree>` (configurable via
+`session_prefix`). `wt session ls` lists the matching sessions with their
+agent-window status; `wt session rm <name>` kills the whole session.
+
+`wt session watch` and the `--watch` flag are currently panes-mode only.
+
 ### Configuration
 
 Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
 
 ```toml
 [session]
-panes = 2           # 2 or 3 (default: 2)
-agent_cmd = "claude"  # command for agent pane
-editor_cmd = "nvim"   # command for editor pane (when panes=3)
+mode = "panes"         # "panes" (default) or "windows"
+panes = 2              # 2 or 3 — also used as window count in windows mode
+session_prefix = "wt-" # prepended to session names in windows mode; set to "" to opt out
+agent_cmd = "claude"   # command for agent pane/window
+editor_cmd = "nvim"    # command for editor pane/window (when panes=3)
 ```
 
-Precedence: `--panes` flag > `.wt.toml` > `~/.wt/config.toml` > defaults
+Precedence: `--mode` / `--panes` flag > `.wt.toml` > `~/.wt/config.toml` > defaults.
+Set `mode = "windows"` in `~/.wt/config.toml` to make windows mode your personal
+default across all repos; override per-repo with `.wt.toml` or per-invocation
+with `--mode`.
 
 ### Navigation
 
