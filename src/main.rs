@@ -663,7 +663,40 @@ fn cmd_session_add_windows(
         tmux.setup_worktree_windows(&worktree_path, panes, &wt_config.session)?;
     }
 
+    persist_windows_session(name, &session_name, &worktree_path, panes)?;
+
     tmux.enter()
+}
+
+/// Record a windows-mode session in `~/.wt/sessions.json` and prune
+/// entries whose tmux session is no longer live.
+fn persist_windows_session(
+    worktree_name: &str,
+    session_name: &str,
+    worktree_path: &Path,
+    panes: u8,
+) -> Result<()> {
+    let mut state = SessionState::load()?.unwrap_or_else(|| SessionState::new(SESSION_NAME));
+
+    let windows = if panes == 3 {
+        vec!["agent".to_string(), "shell".to_string(), "edit".to_string()]
+    } else {
+        vec!["agent".to_string(), "shell".to_string()]
+    };
+
+    state.add_windows_session(
+        worktree_name,
+        wt::session::WindowsSessionInfo {
+            session_name: session_name.to_string(),
+            worktree_path: worktree_path.to_path_buf(),
+            windows,
+        },
+    );
+
+    let live = TmuxManager::live_session_names().unwrap_or_default();
+    wt::session::retain_live_sessions(&mut state.windows_sessions, &live);
+
+    state.save()
 }
 
 fn cmd_session_ls_windows(wt_config: &Config) -> Result<()> {
