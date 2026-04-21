@@ -86,6 +86,28 @@ impl TmuxManager {
         Ok(output.status.success())
     }
 
+    /// Whether a client is currently attached to this session.
+    pub fn is_attached(&self) -> Result<bool> {
+        let output = Command::new("tmux")
+            .args([
+                "display-message",
+                "-t",
+                &self.session_name,
+                "-p",
+                "#{session_attached}",
+            ])
+            .output()
+            .context("Failed to query session attachment")?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        let count: u32 = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        Ok(count > 0)
+    }
+
     /// Create a new session with an initial window
     pub fn create_session(&self, window_name: &str, cwd: &Path) -> Result<()> {
         let output = Command::new("tmux")

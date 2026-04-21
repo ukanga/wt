@@ -454,9 +454,7 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
         },
         Some(SessionAction::Ls) => match wt_config.session.mode {
             SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
-            SessionMode::Windows => {
-                anyhow::bail!("windows mode ls not yet implemented")
-            }
+            SessionMode::Windows => cmd_session_ls_windows(&wt_config),
         },
         Some(SessionAction::Add {
             name,
@@ -483,9 +481,7 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
         }
         Some(SessionAction::Rm { name }) => match wt_config.session.mode {
             SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
-            SessionMode::Windows => {
-                anyhow::bail!("windows mode rm not yet implemented")
-            }
+            SessionMode::Windows => cmd_session_rm_windows(&wt_config, &name),
         },
         Some(SessionAction::Watch { interval }) => {
             cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval)
@@ -661,6 +657,44 @@ fn cmd_session_add_windows(
     }
 
     tmux.enter()
+}
+
+fn cmd_session_ls_windows(wt_config: &Config) -> Result<()> {
+    let prefix = &wt_config.session.session_prefix;
+    let sessions = TmuxManager::list_sessions_with_prefix(prefix)?;
+
+    if sessions.is_empty() {
+        eprintln!("No worktree sessions found (prefix: '{}').", prefix);
+        return Ok(());
+    }
+
+    for session in &sessions {
+        let tmux = TmuxManager::new(session);
+        let attached = tmux.is_attached().unwrap_or(false);
+        let agent_status = tmux
+            .list_windows()
+            .ok()
+            .and_then(|ws| ws.into_iter().find(|w| w.name == "agent"))
+            .map(|w| w.agent_status)
+            .unwrap_or(wt::tmux_manager::AgentStatus::Unknown);
+        let marker = if attached { "*" } else { " " };
+        println!("{} {} (agent: {})", marker, session, agent_status);
+    }
+    Ok(())
+}
+
+fn cmd_session_rm_windows(wt_config: &Config, name: &str) -> Result<()> {
+    let session_name = wt_config.session.session_name_for(name);
+    let tmux = TmuxManager::new(&session_name);
+
+    if !tmux.session_exists()? {
+        eprintln!("Session '{}' not found.", session_name);
+        return Ok(());
+    }
+
+    tmux.kill_session()?;
+    eprintln!("Killed session: {}", session_name);
+    Ok(())
 }
 
 fn cmd_session_rm(tmux: &TmuxManager, name: &str) -> Result<()> {
