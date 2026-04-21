@@ -454,7 +454,7 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
         },
         Some(SessionAction::Ls) => match wt_config.session.mode {
             SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
-            SessionMode::Windows => cmd_session_ls_windows(&wt_config),
+            SessionMode::Windows => cmd_session_ls_windows(),
         },
         Some(SessionAction::Add {
             name,
@@ -699,17 +699,27 @@ fn persist_windows_session(
     state.save()
 }
 
-fn cmd_session_ls_windows(wt_config: &Config) -> Result<()> {
-    let prefix = &wt_config.session.session_prefix;
-    let sessions = TmuxManager::list_sessions_with_prefix(prefix)?;
+fn cmd_session_ls_windows() -> Result<()> {
+    let Some(mut state) = SessionState::load()? else {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+        return Ok(());
+    };
 
-    if sessions.is_empty() {
-        eprintln!("No worktree sessions found (prefix: '{}').", prefix);
+    let live = TmuxManager::live_session_names().unwrap_or_default();
+    wt::session::retain_live_sessions(&mut state.windows_sessions, &live);
+    state.save()?;
+
+    if state.windows_sessions.is_empty() {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
         return Ok(());
     }
 
-    for session in &sessions {
-        let tmux = TmuxManager::new(session);
+    let mut entries: Vec<(&String, &wt::session::WindowsSessionInfo)> =
+        state.windows_sessions.iter().collect();
+    entries.sort_by(|a, b| a.1.session_name.cmp(&b.1.session_name));
+
+    for (_, info) in entries {
+        let tmux = TmuxManager::new(&info.session_name);
         let attached = tmux.is_attached().unwrap_or(false);
         let agent_status = tmux
             .list_windows()
@@ -718,7 +728,7 @@ fn cmd_session_ls_windows(wt_config: &Config) -> Result<()> {
             .map(|w| w.agent_status)
             .unwrap_or(wt::tmux_manager::AgentStatus::Unknown);
         let marker = if attached { "*" } else { " " };
-        println!("{} {} (agent: {})", marker, session, agent_status);
+        println!("{} {} (agent: {})", marker, info.session_name, agent_status);
     }
     Ok(())
 }
