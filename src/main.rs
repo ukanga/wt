@@ -483,9 +483,16 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
             SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
             SessionMode::Windows => cmd_session_rm_windows(&wt_config, &name),
         },
-        Some(SessionAction::Watch { interval }) => {
-            cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval)
-        }
+        Some(SessionAction::Watch { interval }) => match wt_config.session.mode {
+            SessionMode::Panes => cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval),
+            SessionMode::Windows => {
+                eprintln!(
+                    "'wt session watch' is not yet supported in windows mode. \
+                     Use 'wt session ls' to inspect status per session."
+                );
+                Ok(())
+            }
+        },
     }
 }
 
