@@ -70,6 +70,9 @@ enum Commands {
     Which,
     /// Manage tmux session with multiple worktree windows
     Session {
+        /// Override session layout mode for this invocation
+        #[arg(long, value_enum)]
+        mode: Option<SessionMode>,
         #[command(subcommand)]
         action: Option<SessionAction>,
     },
@@ -92,9 +95,6 @@ enum SessionAction {
         /// Create status window with live agent status
         #[arg(long)]
         watch: bool,
-        /// Override session layout mode for this invocation
-        #[arg(long, value_enum)]
-        mode: Option<SessionMode>,
     },
     /// Remove a worktree from the session
     Rm {
@@ -179,7 +179,7 @@ fn main() -> Result<()> {
         Commands::Ls => cmd_ls(&config),
         Commands::Rm { name } => cmd_rm(&config, name),
         Commands::Which => cmd_which(&config.root),
-        Commands::Session { action } => cmd_session(&config, action),
+        Commands::Session { mode, action } => cmd_session(&config, mode, action),
     }
 }
 
@@ -437,20 +437,25 @@ fn cmd_use(config: &RepoConfig, name: Option<String>) -> Result<()> {
 
 const SESSION_NAME: &str = "wt";
 
-fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()> {
+fn cmd_session(
+    config: &RepoConfig,
+    mode_override: Option<SessionMode>,
+    action: Option<SessionAction>,
+) -> Result<()> {
     if !TmuxManager::is_available() {
         eprintln!("tmux not found. Falling back to interactive picker...");
         return cmd_ls(config);
     }
 
     let wt_config = Config::load_for_repo(&config.root);
+    let mode = mode_override.unwrap_or(wt_config.session.mode);
 
     match action {
-        None => match wt_config.session.mode {
+        None => match mode {
             SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
             SessionMode::Windows => cmd_session_attach_windows(),
         },
-        Some(SessionAction::Ls) => match wt_config.session.mode {
+        Some(SessionAction::Ls) => match mode {
             SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
             SessionMode::Windows => cmd_session_ls_windows(),
         },
@@ -459,29 +464,25 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
             base,
             panes,
             watch,
-            mode,
-        }) => {
-            let effective_mode = mode.unwrap_or(wt_config.session.mode);
-            match effective_mode {
-                SessionMode::Panes => cmd_session_add(
-                    config,
-                    &TmuxManager::new(SESSION_NAME),
-                    &wt_config,
-                    &name,
-                    &base,
-                    panes,
-                    watch,
-                ),
-                SessionMode::Windows => {
-                    cmd_session_add_windows(config, &wt_config, &name, &base, panes, watch)
-                }
+        }) => match mode {
+            SessionMode::Panes => cmd_session_add(
+                config,
+                &TmuxManager::new(SESSION_NAME),
+                &wt_config,
+                &name,
+                &base,
+                panes,
+                watch,
+            ),
+            SessionMode::Windows => {
+                cmd_session_add_windows(config, &wt_config, &name, &base, panes, watch)
             }
-        }
-        Some(SessionAction::Rm { name }) => match wt_config.session.mode {
+        },
+        Some(SessionAction::Rm { name }) => match mode {
             SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
             SessionMode::Windows => cmd_session_rm_windows(&wt_config, &name),
         },
-        Some(SessionAction::Watch { interval }) => match wt_config.session.mode {
+        Some(SessionAction::Watch { interval }) => match mode {
             SessionMode::Panes => cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval),
             SessionMode::Windows => {
                 eprintln!(

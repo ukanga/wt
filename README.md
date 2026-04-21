@@ -126,11 +126,13 @@ wt rm [name]              Remove workspace (interactive if no name)
 wt which                  Print current workspace name
 wt session                Attach to tmux session (see Session Mode)
 wt session ls             List workspaces in session (with agent status)
+wt session [--mode panes|windows] <subcommand>
+                          override session layout mode for this invocation
+                          (applies to all session subcommands below)
 wt session add <name>     Add workspace to session
       [-b base]           base: defaults to main
       [--panes 2|3]       override pane count (panes mode) / window count (windows mode)
       [--watch]           add status window with live agent status (panes mode only)
-      [--mode panes|windows]  override session layout mode for this invocation
 wt session rm <name>      Remove workspace from session
 wt session watch [-i N]   Live status dashboard (or use --watch above)
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
