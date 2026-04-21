@@ -86,20 +86,15 @@ impl Config {
     /// deserialize into `Config`. This preserves fields set in the global
     /// file when the local file only sets a subset of keys in the same
     /// section.
+    ///
+    /// Each file is validated as a `Config` in isolation before its table
+    /// is merged in, so a malformed or type-invalid file is skipped (with a
+    /// warning on stderr) and does not poison the other file's values.
     fn load_layered(global: Option<&Path>, local: Option<&Path>) -> Self {
         let mut merged = toml::Table::new();
-        if let Some(path) = global {
-            if let Ok(contents) = std::fs::read_to_string(path) {
-                if let Ok(table) = toml::from_str::<toml::Table>(&contents) {
-                    deep_merge_tables(&mut merged, table);
-                }
-            }
-        }
-        if let Some(path) = local {
-            if let Ok(contents) = std::fs::read_to_string(path) {
-                if let Ok(table) = toml::from_str::<toml::Table>(&contents) {
-                    deep_merge_tables(&mut merged, table);
-                }
+        for path in [global, local].into_iter().flatten() {
+            if let Some(table) = load_valid_config_table(path) {
+                deep_merge_tables(&mut merged, table);
             }
         }
         toml::Value::Table(merged)
@@ -140,6 +135,34 @@ fn deep_merge_tables(base: &mut toml::Table, overlay: toml::Table) {
             }
         }
     }
+}
+
+/// Read one config file and return its parsed `toml::Table` only if it
+/// both parses as TOML and deserializes cleanly into `Config`. A missing
+/// file is silent (expected); a malformed file logs a warning and returns
+/// None so the other layer remains intact.
+fn load_valid_config_table(path: &Path) -> Option<toml::Table> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let table: toml::Table = match toml::from_str(&contents) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "wt: warning: ignoring malformed TOML at {}: {}",
+                path.display(),
+                e
+            );
+            return None;
+        }
+    };
+    if let Err(e) = toml::Value::Table(table.clone()).try_into::<Config>() {
+        eprintln!(
+            "wt: warning: ignoring invalid config at {}: {}",
+            path.display(),
+            e
+        );
+        return None;
+    }
+    Some(table)
 }
 
 #[cfg(test)]
@@ -365,6 +388,80 @@ panes = 3
     #[test]
     fn test_load_layered_returns_default_when_both_missing() {
         let config = Config::load_layered(None, None);
+        assert_eq!(config.session.mode, SessionMode::Panes);
+        assert_eq!(config.session.panes, 2);
+        assert_eq!(config.session.agent_cmd, "claude");
+    }
+
+    #[test]
+    fn test_load_layered_invalid_local_preserves_global() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let local = dir.path().join("local.toml");
+
+        writeln!(
+            std::fs::File::create(&global).unwrap(),
+            "[session]\nagent_cmd = \"aider\"\npanes = 3\n"
+        )
+        .unwrap();
+        // `panes` must be u8 — string forces a Config deserialization error
+        // for the local file only.
+        writeln!(
+            std::fs::File::create(&local).unwrap(),
+            "[session]\npanes = \"two\"\n"
+        )
+        .unwrap();
+
+        let config = Config::load_layered(Some(&global), Some(&local));
+        // Global survives intact.
+        assert_eq!(config.session.agent_cmd, "aider");
+        assert_eq!(config.session.panes, 3);
+    }
+
+    #[test]
+    fn test_load_layered_invalid_global_preserves_local() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let local = dir.path().join("local.toml");
+
+        writeln!(
+            std::fs::File::create(&global).unwrap(),
+            "[session]\nmode = \"invalid\"\n"
+        )
+        .unwrap();
+        writeln!(
+            std::fs::File::create(&local).unwrap(),
+            "[session]\nagent_cmd = \"aider\"\n"
+        )
+        .unwrap();
+
+        let config = Config::load_layered(Some(&global), Some(&local));
+        // Local is kept; global is skipped; defaults fill in the rest.
+        assert_eq!(config.session.agent_cmd, "aider");
+        assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_load_layered_both_invalid_returns_defaults() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let local = dir.path().join("local.toml");
+
+        writeln!(
+            std::fs::File::create(&global).unwrap(),
+            "[session]\npanes = \"two\"\n"
+        )
+        .unwrap();
+        writeln!(
+            std::fs::File::create(&local).unwrap(),
+            "[session]\nmode = \"invalid\"\n"
+        )
+        .unwrap();
+
+        let config = Config::load_layered(Some(&global), Some(&local));
         assert_eq!(config.session.mode, SessionMode::Panes);
         assert_eq!(config.session.panes, 2);
         assert_eq!(config.session.agent_cmd, "claude");
