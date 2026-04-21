@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -194,6 +195,25 @@ impl TmuxManager {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(parse_session_names(&stdout, prefix))
+    }
+
+    /// All currently-live tmux session names. Returns an empty set when
+    /// no tmux server is running (not an error — just nothing to prune
+    /// against).
+    pub fn live_session_names() -> Result<HashSet<String>> {
+        let output = Command::new("tmux")
+            .args(["list-sessions", "-F", "#{session_name}"])
+            .output()
+            .context("Failed to list tmux sessions")?;
+
+        if !output.status.success() {
+            return Ok(HashSet::new());
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|s| s.to_string())
+            .collect())
     }
 
     /// Create a new window in the session
