@@ -4,7 +4,7 @@ use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use wt::config::Config;
+use wt::config::{Config, SessionMode};
 use wt::session::SessionState;
 use wt::shell::spawn_wt_shell;
 use wt::tmux_manager::TmuxManager;
@@ -92,6 +92,9 @@ enum SessionAction {
         /// Create status window with live agent status
         #[arg(long)]
         watch: bool,
+        /// Override session layout mode for this invocation
+        #[arg(long, value_enum)]
+        mode: Option<SessionMode>,
     },
     /// Remove a worktree from the session
     Rm {
@@ -441,19 +444,52 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
     }
 
     let wt_config = Config::load_for_repo(&config.root);
-    let tmux = TmuxManager::new(SESSION_NAME);
 
     match action {
-        None => cmd_session_attach(&tmux),
-        Some(SessionAction::Ls) => cmd_session_ls(&tmux),
+        None => match wt_config.session.mode {
+            SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Windows => {
+                anyhow::bail!("windows mode attach not yet implemented")
+            }
+        },
+        Some(SessionAction::Ls) => match wt_config.session.mode {
+            SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Windows => {
+                anyhow::bail!("windows mode ls not yet implemented")
+            }
+        },
         Some(SessionAction::Add {
             name,
             base,
             panes,
             watch,
-        }) => cmd_session_add(config, &tmux, &wt_config, &name, &base, panes, watch),
-        Some(SessionAction::Rm { name }) => cmd_session_rm(&tmux, &name),
-        Some(SessionAction::Watch { interval }) => cmd_session_watch(&tmux, interval),
+            mode,
+        }) => {
+            let effective_mode = mode.unwrap_or(wt_config.session.mode);
+            match effective_mode {
+                SessionMode::Panes => cmd_session_add(
+                    config,
+                    &TmuxManager::new(SESSION_NAME),
+                    &wt_config,
+                    &name,
+                    &base,
+                    panes,
+                    watch,
+                ),
+                SessionMode::Windows => {
+                    anyhow::bail!("windows mode add not yet implemented")
+                }
+            }
+        }
+        Some(SessionAction::Rm { name }) => match wt_config.session.mode {
+            SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
+            SessionMode::Windows => {
+                anyhow::bail!("windows mode rm not yet implemented")
+            }
+        },
+        Some(SessionAction::Watch { interval }) => {
+            cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval)
+        }
     }
 }
 
