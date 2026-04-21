@@ -83,12 +83,28 @@ fn create_zsh_wrapper() -> Result<PathBuf> {
     let temp_dir = std::env::temp_dir().join(format!("wt-zsh-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir)?;
 
-    let zshrc_content = r#"# Source user's zshrc
-if [[ -n "$_WT_ORIG_ZDOTDIR" ]] && [[ -f "$_WT_ORIG_ZDOTDIR/.zshrc" ]]; then
-    source "$_WT_ORIG_ZDOTDIR/.zshrc"
-elif [[ -f "$HOME/.zshrc" ]]; then
-    source "$HOME/.zshrc"
+    let zshrc_content = r#"# Restore ZDOTDIR so frameworks like prezto can locate their files.
+if [[ -n "$_WT_ORIG_ZDOTDIR" ]]; then
+    ZDOTDIR="$_WT_ORIG_ZDOTDIR"
+else
+    unset ZDOTDIR
 fi
+export ZDOTDIR
+
+# Safety stub: prevents `compdef: command not found` when a startup file calls
+# compdef before compinit runs. Real compdef overrides this once compinit loads.
+(( $+functions[compdef] )) || compdef() { :; }
+
+# Re-source startup files in normal order from the real ZDOTDIR/HOME, since
+# zsh's own startup sourced them from the overridden temp ZDOTDIR (empty).
+_wt_zdot="${ZDOTDIR:-$HOME}"
+[[ -f "$_wt_zdot/.zshenv" ]] && source "$_wt_zdot/.zshenv"
+if [[ -o login ]]; then
+    [[ -f "$_wt_zdot/.zprofile" ]] && source "$_wt_zdot/.zprofile"
+fi
+[[ -f "$_wt_zdot/.zshrc" ]] && source "$_wt_zdot/.zshrc"
+unset _wt_zdot
+
 # Add wt indicator to prompt
 PROMPT="(wt) $PROMPT"
 "#;
