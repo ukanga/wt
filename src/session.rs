@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::config::Config;
@@ -10,6 +10,11 @@ use crate::tmux_manager::TmuxManager;
 pub struct SessionState {
     pub session_name: String,
     pub worktrees: HashMap<String, WindowInfo>,
+    /// Windows-mode sessions keyed by worktree name. Empty for panes-only
+    /// users, and absent from pre-windows-mode state files (handled by
+    /// serde(default)).
+    #[serde(default)]
+    pub windows_sessions: HashMap<String, WindowsSessionInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,11 +24,19 @@ pub struct WindowInfo {
     pub worktree_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowsSessionInfo {
+    pub session_name: String,
+    pub worktree_path: PathBuf,
+    pub windows: Vec<String>,
+}
+
 impl SessionState {
     pub fn new(session_name: &str) -> Self {
         Self {
             session_name: session_name.to_string(),
             worktrees: HashMap::new(),
+            windows_sessions: HashMap::new(),
         }
     }
 
@@ -113,6 +126,29 @@ impl SessionState {
         }
         Ok(())
     }
+
+    /// Upsert a windows-mode session association.
+    pub fn add_windows_session(&mut self, worktree: &str, info: WindowsSessionInfo) {
+        self.windows_sessions.insert(worktree.to_string(), info);
+    }
+
+    /// Remove a windows-mode session association.
+    pub fn remove_windows_session(&mut self, worktree: &str) -> Option<WindowsSessionInfo> {
+        self.windows_sessions.remove(worktree)
+    }
+}
+
+/// Drop windows-mode entries whose tmux session is no longer live.
+///
+/// Pure helper so the pruning logic can be unit-tested without touching
+/// tmux. Callers pass in the current set of live session names (from
+/// `TmuxManager::live_session_names`); entries whose `session_name` is not
+/// in that set are removed in place.
+pub fn retain_live_sessions(
+    entries: &mut HashMap<String, WindowsSessionInfo>,
+    live: &HashSet<String>,
+) {
+    entries.retain(|_, info| live.contains(&info.session_name));
 }
 
 #[cfg(test)]
@@ -152,5 +188,94 @@ mod tests {
 
         assert_eq!(loaded.session_name, "wt");
         assert!(loaded.has_worktree("feature-1"));
+    }
+
+    #[test]
+    fn test_add_remove_windows_session() {
+        let mut state = SessionState::new("wt");
+        let info = WindowsSessionInfo {
+            session_name: "wt-feature".to_string(),
+            worktree_path: PathBuf::from("/path/to/feature"),
+            windows: vec!["agent".into(), "shell".into()],
+        };
+        state.add_windows_session("feature", info.clone());
+
+        assert_eq!(state.windows_sessions.get("feature"), Some(&info));
+        let removed = state.remove_windows_session("feature");
+        assert_eq!(removed, Some(info));
+        assert!(state.windows_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_windows_session_serde_round_trip() {
+        let mut state = SessionState::new("wt");
+        state.add_windows_session(
+            "feature",
+            WindowsSessionInfo {
+                session_name: "wt-feature".to_string(),
+                worktree_path: PathBuf::from("/path/to/feature"),
+                windows: vec!["agent".into(), "shell".into(), "edit".into()],
+            },
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        let loaded: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.windows_sessions, state.windows_sessions);
+    }
+
+    #[test]
+    fn test_deserialize_legacy_state_without_windows_sessions() {
+        // Files written before windows-mode shipped have no
+        // `windows_sessions` field; serde(default) should yield empty map.
+        let legacy = r#"{
+            "session_name": "wt",
+            "worktrees": {}
+        }"#;
+        let state: SessionState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(state.session_name, "wt");
+        assert!(state.windows_sessions.is_empty());
+    }
+
+    #[test]
+    fn test_retain_live_sessions_drops_stale_entries() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "alive".to_string(),
+            WindowsSessionInfo {
+                session_name: "wt-alive".to_string(),
+                worktree_path: PathBuf::from("/p/alive"),
+                windows: vec!["agent".into(), "shell".into()],
+            },
+        );
+        entries.insert(
+            "stale".to_string(),
+            WindowsSessionInfo {
+                session_name: "wt-stale".to_string(),
+                worktree_path: PathBuf::from("/p/stale"),
+                windows: vec!["agent".into(), "shell".into()],
+            },
+        );
+
+        let live: HashSet<String> = ["wt-alive".to_string()].into_iter().collect();
+        retain_live_sessions(&mut entries, &live);
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries.contains_key("alive"));
+        assert!(!entries.contains_key("stale"));
+    }
+
+    #[test]
+    fn test_retain_live_sessions_empty_live_set_clears_all() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "foo".to_string(),
+            WindowsSessionInfo {
+                session_name: "wt-foo".to_string(),
+                worktree_path: PathBuf::from("/p/foo"),
+                windows: vec![],
+            },
+        );
+        retain_live_sessions(&mut entries, &HashSet::new());
+        assert!(entries.is_empty());
     }
 }
