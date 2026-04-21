@@ -1,6 +1,15 @@
 use anyhow::Result;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionMode {
+    #[default]
+    Panes,
+    Windows,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -10,6 +19,8 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
+    #[serde(default)]
+    pub mode: SessionMode,
     #[serde(default = "default_panes")]
     pub panes: u8,
     #[serde(default = "default_agent_cmd")]
@@ -33,6 +44,7 @@ fn default_editor_cmd() -> String {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            mode: SessionMode::default(),
             panes: default_panes(),
             agent_cmd: default_agent_cmd(),
             editor_cmd: default_editor_cmd(),
@@ -155,5 +167,41 @@ panes = 3
         assert_eq!(config.session.panes, 3);
         assert_eq!(config.session.agent_cmd, "claude");
         assert_eq!(config.session.editor_cmd, "nvim");
+    }
+
+    #[test]
+    fn test_default_mode_is_panes() {
+        let config = Config::default();
+        assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_parse_mode_panes() {
+        let toml_str = r#"
+[session]
+mode = "panes"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_parse_mode_windows() {
+        let toml_str = r#"
+[session]
+mode = "windows"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.session.mode, SessionMode::Windows);
+    }
+
+    #[test]
+    fn test_mode_missing_uses_default() {
+        let toml_str = r#"
+[session]
+panes = 3
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.session.mode, SessionMode::Panes);
     }
 }
