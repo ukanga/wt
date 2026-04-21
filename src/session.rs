@@ -127,6 +127,18 @@ impl SessionState {
         Ok(())
     }
 
+    /// Whether the state holds no panes-mode or windows-mode entries.
+    pub fn is_empty(&self) -> bool {
+        self.worktrees.is_empty() && self.windows_sessions.is_empty()
+    }
+
+    /// Drop all panes-mode entries. Preserves `windows_sessions` so
+    /// callers wiping panes state don't accidentally delete live
+    /// windows-mode associations.
+    pub fn clear_panes_state(&mut self) {
+        self.worktrees.clear();
+    }
+
     /// Upsert a windows-mode session association.
     pub fn add_windows_session(&mut self, worktree: &str, info: WindowsSessionInfo) {
         self.windows_sessions.insert(worktree.to_string(), info);
@@ -262,6 +274,37 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries.contains_key("alive"));
         assert!(!entries.contains_key("stale"));
+    }
+
+    #[test]
+    fn test_clear_panes_state_preserves_windows_sessions() {
+        let mut state = SessionState::new("wt");
+        state.add_worktree("feature", 1, 2, PathBuf::from("/path/feature"));
+        state.add_windows_session(
+            "other",
+            WindowsSessionInfo {
+                session_name: "wt-other".to_string(),
+                worktree_path: PathBuf::from("/path/other"),
+                windows: vec!["agent".into(), "shell".into()],
+            },
+        );
+
+        state.clear_panes_state();
+
+        assert!(state.worktrees.is_empty());
+        assert!(!state.windows_sessions.is_empty());
+        assert!(state.windows_sessions.contains_key("other"));
+        assert!(!state.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let mut state = SessionState::new("wt");
+        assert!(state.is_empty());
+        state.add_worktree("feature", 1, 2, PathBuf::from("/path/feature"));
+        assert!(!state.is_empty());
+        state.clear_panes_state();
+        assert!(state.is_empty());
     }
 
     #[test]

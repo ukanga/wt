@@ -827,22 +827,31 @@ fn cmd_session_rm(tmux: &TmuxManager, name: &str) -> Result<()> {
     tmux.kill_window(name)?;
     eprintln!("Removed window: {}", name);
 
-    // Update session state
-    if let Some(mut state) = SessionState::load()? {
-        state.remove_worktree(name);
-        state.sync_with_tmux(tmux)?;
-        state.save()?;
-    }
-
-    // Check if session is now empty (excluding status window)
+    // Check if session is now empty (excluding status window).
     let remaining: Vec<_> = tmux
         .list_windows()?
         .into_iter()
         .filter(|w| w.name != "status")
         .collect();
-    if remaining.is_empty() {
+    let session_drained = remaining.is_empty();
+    if session_drained {
         eprintln!("Session is empty.");
-        SessionState::clear()?;
+    }
+
+    // Update session state. Preserve windows_sessions — they belong to
+    // a different layout mode and live in the same sessions.json file.
+    if let Some(mut state) = SessionState::load()? {
+        if session_drained {
+            state.clear_panes_state();
+        } else {
+            state.remove_worktree(name);
+            state.sync_with_tmux(tmux)?;
+        }
+        if state.is_empty() {
+            SessionState::clear()?;
+        } else {
+            state.save()?;
+        }
     }
 
     Ok(())
