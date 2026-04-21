@@ -477,7 +477,7 @@ fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()>
                     watch,
                 ),
                 SessionMode::Windows => {
-                    anyhow::bail!("windows mode add not yet implemented")
+                    cmd_session_add_windows(config, &wt_config, &name, &base, panes, watch)
                 }
             }
         }
@@ -614,6 +614,53 @@ fn cmd_session_add(
     }
 
     Ok(())
+}
+
+fn cmd_session_add_windows(
+    config: &RepoConfig,
+    wt_config: &Config,
+    name: &str,
+    base: &str,
+    panes_override: Option<u8>,
+    watch: bool,
+) -> Result<()> {
+    check_not_in_worktree(&config.root)?;
+
+    if watch {
+        eprintln!("Note: --watch is ignored in windows mode.");
+    }
+
+    let manager = WorktreeManager::new(config.root.clone())?;
+    ensure_worktrees_in_gitignore(&config.root, &config.worktree_dir)?;
+    std::fs::create_dir_all(&config.worktree_dir)?;
+
+    let worktree_path = match manager.get_worktree_info(name)? {
+        Some(info) => {
+            eprintln!("Using existing worktree: {}", name);
+            info.path
+        }
+        None => {
+            eprintln!("Creating worktree: {}", name);
+            manager.create_worktree(name, base, &config.worktree_dir)?
+        }
+    };
+
+    let panes = wt_config.effective_panes(panes_override);
+    let session_name = wt_config.session.session_name_for(name);
+    let tmux = TmuxManager::new(&session_name);
+
+    if tmux.session_exists()? {
+        eprintln!("Using existing session: {}", session_name);
+    } else {
+        eprintln!(
+            "Creating tmux session: {} ({} windows)",
+            session_name, panes
+        );
+        tmux.create_session("agent", &worktree_path)?;
+        tmux.setup_worktree_windows(&worktree_path, panes, &wt_config.session)?;
+    }
+
+    tmux.enter()
 }
 
 fn cmd_session_rm(tmux: &TmuxManager, name: &str) -> Result<()> {
