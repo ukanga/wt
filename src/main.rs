@@ -777,14 +777,27 @@ fn cmd_session_ls_windows() -> Result<()> {
 fn cmd_session_rm_windows(wt_config: &Config, name: &str) -> Result<()> {
     let session_name = wt_config.session.session_name_for(name);
     let tmux = TmuxManager::new(&session_name);
+    let session_existed = tmux.session_exists()?;
 
-    if !tmux.session_exists()? {
+    if session_existed {
+        tmux.kill_session()?;
+        eprintln!("Killed session: {}", session_name);
+    } else {
         eprintln!("Session '{}' not found.", session_name);
-        return Ok(());
     }
 
-    tmux.kill_session()?;
-    eprintln!("Killed session: {}", session_name);
+    // Clean up SessionState regardless of whether the tmux session existed:
+    // the entry may be stale from a crash or an external kill-session.
+    if let Some(mut state) = SessionState::load()? {
+        let removed = state.remove_windows_session(name).is_some();
+        let live = TmuxManager::live_session_names().unwrap_or_default();
+        wt::session::retain_live_sessions(&mut state.windows_sessions, &live);
+        state.save()?;
+        if removed && !session_existed {
+            eprintln!("Removed stale state entry for '{}'.", name);
+        }
+    }
+
     Ok(())
 }
 
