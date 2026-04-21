@@ -23,6 +23,8 @@ pub struct SessionConfig {
     pub mode: SessionMode,
     #[serde(default = "default_panes")]
     pub panes: u8,
+    #[serde(default = "default_session_prefix")]
+    pub session_prefix: String,
     #[serde(default = "default_agent_cmd")]
     pub agent_cmd: String,
     #[serde(default = "default_editor_cmd")]
@@ -31,6 +33,10 @@ pub struct SessionConfig {
 
 fn default_panes() -> u8 {
     2
+}
+
+fn default_session_prefix() -> String {
+    "wt-".to_string()
 }
 
 fn default_agent_cmd() -> String {
@@ -46,9 +52,19 @@ impl Default for SessionConfig {
         Self {
             mode: SessionMode::default(),
             panes: default_panes(),
+            session_prefix: default_session_prefix(),
             agent_cmd: default_agent_cmd(),
             editor_cmd: default_editor_cmd(),
         }
+    }
+}
+
+impl SessionConfig {
+    /// Compute the tmux session name for a worktree in windows mode by
+    /// prepending `session_prefix`. An empty prefix returns the worktree
+    /// name unchanged (opt-in by the user).
+    pub fn session_name_for(&self, worktree: &str) -> String {
+        format!("{}{}", self.session_prefix, worktree)
     }
 }
 
@@ -203,5 +219,44 @@ panes = 3
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_default_session_prefix() {
+        let config = Config::default();
+        assert_eq!(config.session.session_prefix, "wt-");
+    }
+
+    #[test]
+    fn test_session_name_for_default_prefix() {
+        let config = Config::default();
+        assert_eq!(
+            config.session.session_name_for("detect-pii"),
+            "wt-detect-pii"
+        );
+    }
+
+    #[test]
+    fn test_session_name_for_empty_prefix() {
+        let mut config = Config::default();
+        config.session.session_prefix = String::new();
+        assert_eq!(config.session.session_name_for("detect-pii"), "detect-pii");
+    }
+
+    #[test]
+    fn test_session_name_for_custom_prefix() {
+        let mut config = Config::default();
+        config.session.session_prefix = "proj/".to_string();
+        assert_eq!(config.session.session_name_for("foo"), "proj/foo");
+    }
+
+    #[test]
+    fn test_parse_session_prefix_empty_string() {
+        let toml_str = r#"
+[session]
+session_prefix = ""
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.session.session_prefix, "");
     }
 }
