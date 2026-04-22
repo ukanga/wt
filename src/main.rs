@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use wt::config::{Config, SessionMode};
-use wt::session::SessionState;
+use wt::session::{SessionState, WindowsSessionInfo};
 use wt::shell::spawn_wt_shell;
 use wt::tmux_manager::TmuxManager;
 use wt::worktree_manager::{
     check_not_in_worktree, ensure_worktrees_in_gitignore, get_current_worktree_name,
     WorktreeManager,
 };
+use wt::{AgentStatus, AGENT_WINDOW};
 
 #[derive(Parser)]
 #[command(
@@ -453,11 +454,11 @@ fn cmd_session(
     match action {
         None => match mode {
             SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
-            SessionMode::Windows => anyhow::bail!("windows-mode attach not yet implemented"),
+            SessionMode::Windows => cmd_session_attach_windows(),
         },
         Some(SessionAction::Ls) => match mode {
             SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
-            SessionMode::Windows => anyhow::bail!("windows-mode ls not yet implemented"),
+            SessionMode::Windows => cmd_session_ls_windows(),
         },
         Some(SessionAction::Add {
             name,
@@ -474,11 +475,13 @@ fn cmd_session(
                 panes,
                 watch,
             ),
-            SessionMode::Windows => anyhow::bail!("windows-mode add not yet implemented"),
+            SessionMode::Windows => {
+                cmd_session_add_windows(config, &wt_config, &name, &base, panes, watch)
+            }
         },
         Some(SessionAction::Rm { name }) => match mode {
             SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
-            SessionMode::Windows => anyhow::bail!("windows-mode rm not yet implemented"),
+            SessionMode::Windows => cmd_session_rm_windows(&wt_config, &name),
         },
         Some(SessionAction::Watch { interval }) => match mode {
             SessionMode::Panes => cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval),
@@ -652,6 +655,176 @@ fn cmd_session_rm(tmux: &TmuxManager, name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_session_add_windows(
+    config: &RepoConfig,
+    wt_config: &Config,
+    name: &str,
+    base: &str,
+    panes_override: Option<u8>,
+    watch: bool,
+) -> Result<()> {
+    check_not_in_worktree(&config.root)?;
+
+    if watch {
+        eprintln!("Note: --watch is ignored in windows mode.");
+    }
+
+    let manager = WorktreeManager::new(config.root.clone())?;
+    ensure_worktrees_in_gitignore(&config.root, &config.worktree_dir)?;
+    std::fs::create_dir_all(&config.worktree_dir)?;
+
+    let worktree_path = match manager.get_worktree_info(name)? {
+        Some(info) => {
+            eprintln!("Using existing worktree: {}", name);
+            info.path
+        }
+        None => {
+            eprintln!("Creating worktree: {}", name);
+            manager.create_worktree(name, base, &config.worktree_dir)?
+        }
+    };
+
+    let panes = wt_config.effective_panes(panes_override);
+    let session_name = wt_config.session.session_name_for(name);
+    let tmux = TmuxManager::new(&session_name);
+
+    if tmux.session_exists()? {
+        eprintln!("Using existing session: {}", session_name);
+    } else {
+        eprintln!(
+            "Creating tmux session: {} ({} windows)",
+            session_name, panes
+        );
+        tmux.create_session(AGENT_WINDOW, &worktree_path)?;
+        tmux.setup_worktree_windows(&worktree_path, panes, &wt_config.session)?;
+    }
+
+    persist_windows_session(name, &session_name, &worktree_path)?;
+    tmux.enter()
+}
+
+/// Record a windows-mode session in `~/.wt/sessions.json` and prune any
+/// stale entries. Skips the save when nothing would change.
+fn persist_windows_session(
+    worktree_name: &str,
+    session_name: &str,
+    worktree_path: &Path,
+) -> Result<()> {
+    let mut state = SessionState::load_or_new()?;
+    state.add_windows_session(
+        worktree_name,
+        WindowsSessionInfo {
+            session_name: session_name.to_string(),
+            worktree_path: worktree_path.to_path_buf(),
+        },
+    );
+    state.prune_windows_sessions(&TmuxManager::live_session_names().unwrap_or_default());
+    // Adding is always a change; save unconditionally here.
+    state.save()
+}
+
+fn cmd_session_ls_windows() -> Result<()> {
+    let mut state = SessionState::load_or_new()?;
+    refresh_and_save(&mut state)?;
+
+    if state.windows_sessions.is_empty() {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+        return Ok(());
+    }
+
+    for (_, info) in sorted_windows_entries(&state) {
+        let tmux = TmuxManager::new(&info.session_name);
+        let attached = tmux.is_attached().unwrap_or(false);
+        let agent_status = tmux
+            .get_agent_status(AGENT_WINDOW)
+            .unwrap_or(AgentStatus::Unknown);
+        let marker = if attached { "*" } else { " " };
+        println!("{} {} (agent: {})", marker, info.session_name, agent_status);
+    }
+    Ok(())
+}
+
+fn cmd_session_attach_windows() -> Result<()> {
+    let mut state = SessionState::load_or_new()?;
+    refresh_and_save(&mut state)?;
+
+    if state.windows_sessions.is_empty() {
+        eprintln!("No worktree sessions found. Use 'wt session add <name>' to create one.");
+        return Ok(());
+    }
+
+    let names: Vec<String> = sorted_windows_entries(&state)
+        .into_iter()
+        .map(|(_, info)| info.session_name.clone())
+        .collect();
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        for name in &names {
+            println!("{}", name);
+        }
+        return Ok(());
+    }
+
+    let mut items = names.clone();
+    items.push("← cancel".to_string());
+    eprintln!("Select worktree session:");
+    let selection = Select::new().items(&items).default(0).interact()?;
+    if items[selection] == "← cancel" {
+        return Ok(());
+    }
+
+    TmuxManager::new(&items[selection]).enter()
+}
+
+fn cmd_session_rm_windows(wt_config: &Config, name: &str) -> Result<()> {
+    let mut state = SessionState::load_or_new()?;
+
+    // Prefer the session name persisted at creation time — the user may
+    // have changed `session_prefix` since, which would make a fresh
+    // `session_name_for()` point at a different tmux session.
+    let session_name = state
+        .windows_sessions
+        .get(name)
+        .map(|info| info.session_name.clone())
+        .unwrap_or_else(|| wt_config.session.session_name_for(name));
+
+    let tmux = TmuxManager::new(&session_name);
+    let session_existed = tmux.session_exists()?;
+    if session_existed {
+        tmux.kill_session()?;
+        eprintln!("Killed session: {}", session_name);
+    } else {
+        eprintln!("Session '{}' not found.", session_name);
+    }
+
+    let removed = state.remove_windows_session(name).is_some();
+    state.prune_windows_sessions(&TmuxManager::live_session_names().unwrap_or_default());
+    if state.is_empty() {
+        SessionState::clear()?;
+    } else {
+        state.save()?;
+    }
+    if removed && !session_existed {
+        eprintln!("Removed stale state entry for '{}'.", name);
+    }
+    Ok(())
+}
+
+/// Prune stale `windows_sessions` and persist when anything changed.
+fn refresh_and_save(state: &mut SessionState) -> Result<()> {
+    let live = TmuxManager::live_session_names().unwrap_or_default();
+    if state.prune_windows_sessions(&live) {
+        state.save()?;
+    }
+    Ok(())
+}
+
+fn sorted_windows_entries(state: &SessionState) -> Vec<(&String, &WindowsSessionInfo)> {
+    let mut entries: Vec<_> = state.windows_sessions.iter().collect();
+    entries.sort_by(|a, b| a.1.session_name.cmp(&b.1.session_name));
+    entries
 }
 
 fn cmd_session_watch(tmux: &TmuxManager, interval: u64) -> Result<()> {
