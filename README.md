@@ -124,14 +124,17 @@ wt use [name]             Enter existing workspace
 wt ls                     Interactive workspace picker
 wt rm [name]              Remove workspace (interactive if no name)
 wt which                  Print current workspace name
-wt session                Attach to tmux session (see Session Mode)
+wt session [--mode panes|windows] <subcommand>
+                          override session layout mode for this invocation
+                          (applies to all session subcommands below)
+wt session                Attach or pick a tmux session (see Session Mode)
 wt session ls             List workspaces in session (with agent status)
 wt session add <name>     Add workspace to session
       [-b base]           base: defaults to main
-      [--panes 2|3]       override pane count
-      [--watch]           add status window with live agent status
+      [--panes 2|3]       override pane count (panes mode) / window count (windows mode)
+      [--watch]           add status window with live agent status (panes mode only)
 wt session rm <name>      Remove workspace from session
-wt session watch [-i N]   Live status dashboard (or use --watch above)
+wt session watch [-i N]   Live status dashboard (panes mode only)
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
 ```
 
@@ -172,9 +175,16 @@ wt session add feature/auth --watch
 
 Or run `wt session watch` manually in any pane.
 
-### Pane Layouts
+### Layout modes
 
-**2 panes (default):**
+`wt` supports two tmux layouts — pick whichever matches your workflow.
+
+#### Panes mode (default)
+
+All worktrees live in one shared `wt` tmux session, one window per
+worktree, split into 2 or 3 panes:
+
+**2 panes:**
 ```
 +---------------------------+---------------------------+
 |                           |                           |
@@ -195,18 +205,49 @@ Or run `wt session watch` manually in any pane.
 +---------------------------+---------------------------+
 ```
 
+#### Windows mode
+
+Each worktree gets its own tmux session with one window per role —
+useful on narrow screens where pane splits are cramped, or when you
+prefer window navigation over pane navigation.
+
+- 2 windows: `agent`, `shell`
+- 3 windows: `agent`, `shell`, `edit`
+
+Session names default to `wt-<worktree>` (configurable via
+`session_prefix`). `wt session` opens a picker across your live
+worktree sessions; `wt session ls` lists them with agent-window
+status; `wt session rm <name>` kills a session.
+
+`wt` records each windows-mode session in `~/.wt/sessions.json` when
+you run `wt session add`. Discovery (`ls`, `session` picker) reads
+that state file — not tmux naming patterns — so setting
+`session_prefix = ""` only affects naming; unrelated tmux sessions
+never leak into listings. The file is self-healing: stale entries for
+sessions killed externally are pruned on read.
+
+`wt session watch` and the `--watch` flag are currently panes-mode only.
+
 ### Configuration
 
-Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
+Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo
+root for per-repo settings:
 
 ```toml
 [session]
-panes = 2           # 2 or 3 (default: 2)
-agent_cmd = "claude"  # command for agent pane
-editor_cmd = "nvim"   # command for editor pane (when panes=3)
+mode = "panes"         # "panes" (default) or "windows"
+panes = 2              # 2 or 3 — also the window count in windows mode
+session_prefix = "wt-" # prepended to session names in windows mode; "" opts out
+agent_cmd = "claude"   # command for the agent pane / window
+editor_cmd = "nvim"    # command for the editor pane / window (when panes=3)
 ```
 
-Precedence: `--panes` flag > `.wt.toml` > `~/.wt/config.toml` > defaults
+Precedence: `--mode` / `--panes` flag > `.wt.toml` > `~/.wt/config.toml`
+> defaults. Values are deep-merged field-by-field, so a partial
+`.wt.toml` (e.g. just `mode = "windows"`) still inherits
+`agent_cmd`, `panes`, etc. from the global file. Set
+`mode = "windows"` in `~/.wt/config.toml` to make windows mode your
+personal default across all repos.
 
 ### Navigation
 
