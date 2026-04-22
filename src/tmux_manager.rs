@@ -204,11 +204,12 @@ impl TmuxManager {
 
     /// Create a new window in the session.
     pub fn create_window(&self, name: &str, cwd: &Path) -> Result<u32> {
+        let target = self.next_window_target();
         let output = Command::new("tmux")
             .args([
                 "new-window",
                 "-t",
-                &self.session_name,
+                &target,
                 "-n",
                 name,
                 "-c",
@@ -233,6 +234,11 @@ impl TmuxManager {
             .parse()
             .context("Failed to parse window index")?;
         Ok(index)
+    }
+
+    /// Target the next unused window index in this session.
+    fn next_window_target(&self) -> String {
+        format!("{}:", self.session_name)
     }
 
     /// Kill a window by name.
@@ -491,5 +497,11 @@ mod tests {
     fn test_manager_creation() {
         let manager = TmuxManager::new("test-session");
         assert_eq!(manager.session_name(), "test-session");
+    }
+
+    #[test]
+    fn test_next_window_target_uses_next_free_index_syntax() {
+        let manager = TmuxManager::new("wt");
+        assert_eq!(manager.next_window_target(), "wt:");
     }
 }
