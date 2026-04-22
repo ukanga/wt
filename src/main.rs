@@ -4,7 +4,7 @@ use dialoguer::Select;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use wt::config::Config;
+use wt::config::{Config, SessionMode};
 use wt::session::SessionState;
 use wt::shell::spawn_wt_shell;
 use wt::tmux_manager::TmuxManager;
@@ -70,6 +70,9 @@ enum Commands {
     Which,
     /// Manage tmux session with multiple worktree windows
     Session {
+        /// Override session layout mode for this invocation
+        #[arg(long, value_enum)]
+        mode: Option<SessionMode>,
         #[command(subcommand)]
         action: Option<SessionAction>,
     },
@@ -176,7 +179,7 @@ fn main() -> Result<()> {
         Commands::Ls => cmd_ls(&config),
         Commands::Rm { name } => cmd_rm(&config, name),
         Commands::Which => cmd_which(&config.root),
-        Commands::Session { action } => cmd_session(&config, action),
+        Commands::Session { mode, action } => cmd_session(&config, mode, action),
     }
 }
 
@@ -434,26 +437,59 @@ fn cmd_use(config: &RepoConfig, name: Option<String>) -> Result<()> {
 
 const SESSION_NAME: &str = "wt";
 
-fn cmd_session(config: &RepoConfig, action: Option<SessionAction>) -> Result<()> {
+fn cmd_session(
+    config: &RepoConfig,
+    mode_override: Option<SessionMode>,
+    action: Option<SessionAction>,
+) -> Result<()> {
     if !TmuxManager::is_available() {
         eprintln!("tmux not found. Falling back to interactive picker...");
         return cmd_ls(config);
     }
 
     let wt_config = Config::load_for_repo(&config.root);
-    let tmux = TmuxManager::new(SESSION_NAME);
+    let mode = mode_override.unwrap_or(wt_config.session.mode);
 
     match action {
-        None => cmd_session_attach(&tmux),
-        Some(SessionAction::Ls) => cmd_session_ls(&tmux),
+        None => match mode {
+            SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Windows => anyhow::bail!("windows-mode attach not yet implemented"),
+        },
+        Some(SessionAction::Ls) => match mode {
+            SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Windows => anyhow::bail!("windows-mode ls not yet implemented"),
+        },
         Some(SessionAction::Add {
             name,
             base,
             panes,
             watch,
-        }) => cmd_session_add(config, &tmux, &wt_config, &name, &base, panes, watch),
-        Some(SessionAction::Rm { name }) => cmd_session_rm(&tmux, &name),
-        Some(SessionAction::Watch { interval }) => cmd_session_watch(&tmux, interval),
+        }) => match mode {
+            SessionMode::Panes => cmd_session_add(
+                config,
+                &TmuxManager::new(SESSION_NAME),
+                &wt_config,
+                &name,
+                &base,
+                panes,
+                watch,
+            ),
+            SessionMode::Windows => anyhow::bail!("windows-mode add not yet implemented"),
+        },
+        Some(SessionAction::Rm { name }) => match mode {
+            SessionMode::Panes => cmd_session_rm(&TmuxManager::new(SESSION_NAME), &name),
+            SessionMode::Windows => anyhow::bail!("windows-mode rm not yet implemented"),
+        },
+        Some(SessionAction::Watch { interval }) => match mode {
+            SessionMode::Panes => cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval),
+            SessionMode::Windows => {
+                eprintln!(
+                    "'wt session watch' is not yet supported in windows mode. \
+                     Use 'wt session ls' to inspect status per session."
+                );
+                Ok(())
+            }
+        },
     }
 }
 
@@ -468,7 +504,7 @@ fn cmd_session_attach(tmux: &TmuxManager) -> Result<()> {
         return Ok(());
     }
 
-    tmux.attach()?;
+    tmux.enter()?;
     Ok(())
 }
 
@@ -570,11 +606,10 @@ fn cmd_session_add(
     state.save()?;
 
     if inside_session {
-        // Already inside, just switch to the window
         tmux.select_window(name)?;
     } else {
-        eprintln!("Attaching to session...");
-        tmux.attach()?;
+        eprintln!("Entering session...");
+        tmux.enter()?;
     }
 
     Ok(())
@@ -595,22 +630,25 @@ fn cmd_session_rm(tmux: &TmuxManager, name: &str) -> Result<()> {
     tmux.kill_window(name)?;
     eprintln!("Removed window: {}", name);
 
-    // Update session state
-    if let Some(mut state) = SessionState::load()? {
-        state.remove_worktree(name);
-        state.sync_with_tmux(tmux)?;
-        state.save()?;
+    let session_drained = tmux.list_windows()?.into_iter().all(|w| w.name == "status");
+    if session_drained {
+        eprintln!("Session is empty.");
     }
 
-    // Check if session is now empty (excluding status window)
-    let remaining: Vec<_> = tmux
-        .list_windows()?
-        .into_iter()
-        .filter(|w| w.name != "status")
-        .collect();
-    if remaining.is_empty() {
-        eprintln!("Session is empty.");
-        SessionState::clear()?;
+    // Update state while preserving windows_sessions — that data lives in
+    // the same file but belongs to a different layout mode.
+    if let Some(mut state) = SessionState::load()? {
+        if session_drained {
+            state.clear_panes_state();
+        } else {
+            state.remove_worktree(name);
+            state.sync_with_tmux(tmux)?;
+        }
+        if state.is_empty() {
+            SessionState::clear()?;
+        } else {
+            state.save()?;
+        }
     }
 
     Ok(())
