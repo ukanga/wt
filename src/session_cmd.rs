@@ -381,12 +381,7 @@ fn cmd_session_ls_windows() -> Result<()> {
     for (_, info) in sorted_windows_sessions(&state) {
         let tmux = TmuxManager::new(&info.session_name);
         let attached = tmux.is_attached().unwrap_or(false);
-        let agent_status = tmux
-            .list_windows()
-            .ok()
-            .and_then(|windows| windows.into_iter().find(|window| window.name == "agent"))
-            .map(|window| window.agent_status)
-            .unwrap_or(AgentStatus::Unknown);
+        let agent_status = agent_window_status(&tmux);
         let marker = if attached { "*" } else { " " };
         println!("{} {} (agent: {})", marker, info.session_name, agent_status);
     }
@@ -497,18 +492,12 @@ fn persist_windows_session(
 ) -> Result<()> {
     let mut state = SessionState::load()?.unwrap_or_else(|| SessionState::new(SESSION_NAME));
 
-    let windows = if panes == 3 {
-        vec!["agent".to_string(), "shell".to_string(), "edit".to_string()]
-    } else {
-        vec!["agent".to_string(), "shell".to_string()]
-    };
-
     state.add_windows_session(
         worktree_name,
         WindowsSessionInfo {
             session_name: session_name.to_string(),
             worktree_path: worktree_path.to_path_buf(),
-            windows,
+            windows: windows_layout_names(panes),
         },
     );
     prune_windows_state(&mut state);
@@ -557,6 +546,22 @@ fn sorted_windows_sessions(state: &SessionState) -> Vec<(&String, &WindowsSessio
     let mut entries: Vec<_> = state.windows_sessions.iter().collect();
     entries.sort_by(|left, right| left.1.session_name.cmp(&right.1.session_name));
     entries
+}
+
+fn windows_layout_names(panes: u8) -> Vec<String> {
+    if panes == 3 {
+        vec!["agent".to_string(), "shell".to_string(), "edit".to_string()]
+    } else {
+        vec!["agent".to_string(), "shell".to_string()]
+    }
+}
+
+fn agent_window_status(tmux: &TmuxManager) -> AgentStatus {
+    tmux.list_windows()
+        .ok()
+        .and_then(|windows| windows.into_iter().find(|window| window.name == "agent"))
+        .map(|window| window.agent_status)
+        .unwrap_or(AgentStatus::Unknown)
 }
 
 fn probe_session_rm(context: &SessionCmdContext<'_>, name: &str) -> Result<SessionRmProbe> {
@@ -715,5 +720,17 @@ mod tests {
     fn test_rm_hint_is_empty_when_nothing_matches() {
         assert_eq!(panes_rm_hint("demo", &probe()), None);
         assert_eq!(windows_rm_hint("demo", &probe()), None);
+    }
+
+    #[test]
+    fn test_windows_layout_names_match_pane_count() {
+        assert_eq!(
+            windows_layout_names(2),
+            vec!["agent".to_string(), "shell".to_string()]
+        );
+        assert_eq!(
+            windows_layout_names(3),
+            vec!["agent".to_string(), "shell".to_string(), "edit".to_string()]
+        );
     }
 }
