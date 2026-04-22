@@ -88,11 +88,17 @@ pub(crate) fn run_session(
 
     match action {
         None => match context.mode {
-            SessionMode::Panes => cmd_session_attach(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Panes => {
+                let tmux = panes_tmux();
+                cmd_session_attach(&tmux)
+            }
             SessionMode::Windows => cmd_session_attach_windows(),
         },
         Some(SessionAction::Ls) => match context.mode {
-            SessionMode::Panes => cmd_session_ls(&TmuxManager::new(SESSION_NAME)),
+            SessionMode::Panes => {
+                let tmux = panes_tmux();
+                cmd_session_ls(&tmux)
+            }
             SessionMode::Windows => cmd_session_ls_windows(),
         },
         Some(SessionAction::Add {
@@ -109,7 +115,10 @@ pub(crate) fn run_session(
             SessionMode::Windows => cmd_session_rm_windows(&context, &name),
         },
         Some(SessionAction::Watch { interval }) => match context.mode {
-            SessionMode::Panes => cmd_session_watch(&TmuxManager::new(SESSION_NAME), interval),
+            SessionMode::Panes => {
+                let tmux = panes_tmux();
+                cmd_session_watch(&tmux, interval)
+            }
             SessionMode::Windows => {
                 eprintln!(
                     "'wt session watch' is not yet supported in windows mode. \
@@ -142,6 +151,30 @@ fn ensure_worktree_path(
             manager.create_worktree(name, base, &context.repo.worktree_dir)
         }
     }
+}
+
+fn panes_tmux() -> TmuxManager {
+    TmuxManager::new(SESSION_NAME)
+}
+
+fn create_status_window_session(tmux: &TmuxManager, repo_root: &Path) -> Result<()> {
+    tmux.create_session("status", repo_root)?;
+    tmux.send_keys("status", 0, "wt session watch")?;
+    Ok(())
+}
+
+fn ensure_status_window(tmux: &TmuxManager, repo_root: &Path) -> Result<()> {
+    if tmux
+        .list_windows()?
+        .iter()
+        .any(|window| window.name == "status")
+    {
+        return Ok(());
+    }
+
+    tmux.create_window("status", repo_root)?;
+    tmux.send_keys("status", 0, "wt session watch")?;
+    Ok(())
 }
 
 fn cmd_session_attach(tmux: &TmuxManager) -> Result<()> {
@@ -192,7 +225,7 @@ fn cmd_session_add_panes(
     panes_override: Option<u8>,
     watch: bool,
 ) -> Result<()> {
-    let tmux = TmuxManager::new(SESSION_NAME);
+    let tmux = panes_tmux();
     let worktree_path = ensure_worktree_path(context, name, base)?;
     let panes = context.effective_panes(panes_override);
     let inside_session = tmux.is_inside_session();
@@ -200,20 +233,18 @@ fn cmd_session_add_panes(
     if !tmux.session_exists()? {
         eprintln!("Creating tmux session: {}", SESSION_NAME);
         if watch {
-            tmux.create_session("status", &context.repo.root)?;
-            tmux.send_keys("status", 0, "wt session watch")?;
+            create_status_window_session(&tmux, &context.repo.root)?;
             tmux.create_window(name, &worktree_path)?;
         } else {
             tmux.create_session(name, &worktree_path)?;
         }
         tmux.setup_worktree_layout(name, &worktree_path, panes, &context.config.session)?;
     } else {
-        let windows = tmux.list_windows()?;
-
-        if watch && !windows.iter().any(|window| window.name == "status") {
-            tmux.create_window("status", &context.repo.root)?;
-            tmux.send_keys("status", 0, "wt session watch")?;
+        if watch {
+            ensure_status_window(&tmux, &context.repo.root)?;
         }
+
+        let windows = tmux.list_windows()?;
 
         if windows.iter().any(|window| window.name == name) {
             eprintln!("Window '{}' already exists in session.", name);
@@ -243,7 +274,7 @@ fn cmd_session_add_panes(
 }
 
 fn cmd_session_rm_panes(context: &SessionCmdContext<'_>, name: &str) -> Result<()> {
-    let tmux = TmuxManager::new(SESSION_NAME);
+    let tmux = panes_tmux();
 
     if !tmux.session_exists()? {
         eprintln!("No session found.");
