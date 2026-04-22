@@ -155,12 +155,20 @@ $ wt session --mode windows add feature/review
 $ wt session --mode windows ls
   wt-feature-review (agent: idle)
 
-# Enter tmux session(s)
+# Enter the default panes session
 $ wt session
 
-# Remove workspace from session
+# Remove a panes-mode workspace
 $ wt session rm feature/auth
+
+# Enter or remove a windows-mode worktree session
+$ wt session --mode windows
+$ wt session --mode windows rm feature/review
 ```
+
+`--mode` only affects the command it is passed to. Set `mode = "windows"`
+in config if you want windows mode to be the default for bare
+`wt session` commands.
 
 ### Layout Modes
 
@@ -243,8 +251,13 @@ Precedence: `--mode` / `--panes` flags > `.wt.toml` > `~/.wt/config.toml` > defa
 
 Standard tmux keybindings:
 - `C-b` + arrow keys — switch panes
-- `C-b n` / `C-b p` — next/previous window
+- `C-b n` / `C-b p` — next/previous window in the current tmux session
 - `C-b d` — detach from session
+
+In windows mode, `C-b n` / `C-b p` only moves between the `agent`, `shell`,
+and `edit` windows for one worktree. To switch to a different worktree
+session, run `wt session --mode windows` again; from inside tmux, `wt` uses
+`switch-client` instead of nesting tmux sessions.
 
 ### Environment Variables
 
