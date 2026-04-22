@@ -1,6 +1,19 @@
 use anyhow::Result;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// Tmux layout for `wt session`. `Panes` packs all worktrees into one
+/// shared `wt` session with a window per worktree split into panes.
+/// `Windows` gives each worktree its own tmux session with one window
+/// per role (agent / shell / edit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionMode {
+    #[default]
+    Panes,
+    Windows,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -10,8 +23,12 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
+    #[serde(default)]
+    pub mode: SessionMode,
     #[serde(default = "default_panes")]
     pub panes: u8,
+    #[serde(default = "default_session_prefix")]
+    pub session_prefix: String,
     #[serde(default = "default_agent_cmd")]
     pub agent_cmd: String,
     #[serde(default = "default_editor_cmd")]
@@ -20,6 +37,10 @@ pub struct SessionConfig {
 
 fn default_panes() -> u8 {
     2
+}
+
+fn default_session_prefix() -> String {
+    "wt-".to_string()
 }
 
 fn default_agent_cmd() -> String {
@@ -33,10 +54,20 @@ fn default_editor_cmd() -> String {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            mode: SessionMode::default(),
             panes: default_panes(),
+            session_prefix: default_session_prefix(),
             agent_cmd: default_agent_cmd(),
             editor_cmd: default_editor_cmd(),
         }
+    }
+}
+
+impl SessionConfig {
+    /// Resolve the tmux session name for a worktree in windows mode.
+    /// An empty `session_prefix` returns the worktree name unchanged.
+    pub fn session_name_for(&self, worktree: &str) -> String {
+        format!("{}{}", self.session_prefix, worktree)
     }
 }
 
@@ -155,5 +186,62 @@ panes = 3
         assert_eq!(config.session.panes, 3);
         assert_eq!(config.session.agent_cmd, "claude");
         assert_eq!(config.session.editor_cmd, "nvim");
+    }
+
+    #[test]
+    fn test_default_mode_is_panes() {
+        assert_eq!(Config::default().session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_default_session_prefix() {
+        assert_eq!(Config::default().session.session_prefix, "wt-");
+    }
+
+    #[test]
+    fn test_parse_mode_panes() {
+        let config: Config = toml::from_str("[session]\nmode = \"panes\"\n").unwrap();
+        assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_parse_mode_windows() {
+        let config: Config = toml::from_str("[session]\nmode = \"windows\"\n").unwrap();
+        assert_eq!(config.session.mode, SessionMode::Windows);
+    }
+
+    #[test]
+    fn test_mode_missing_uses_default() {
+        let config: Config = toml::from_str("[session]\npanes = 3\n").unwrap();
+        assert_eq!(config.session.mode, SessionMode::Panes);
+    }
+
+    #[test]
+    fn test_parse_session_prefix_empty_string() {
+        let config: Config = toml::from_str("[session]\nsession_prefix = \"\"\n").unwrap();
+        assert_eq!(config.session.session_prefix, "");
+    }
+
+    #[test]
+    fn test_session_name_for_default_prefix() {
+        let config = Config::default();
+        assert_eq!(
+            config.session.session_name_for("detect-pii"),
+            "wt-detect-pii"
+        );
+    }
+
+    #[test]
+    fn test_session_name_for_empty_prefix() {
+        let mut config = Config::default();
+        config.session.session_prefix = String::new();
+        assert_eq!(config.session.session_name_for("detect-pii"), "detect-pii");
+    }
+
+    #[test]
+    fn test_session_name_for_custom_prefix() {
+        let mut config = Config::default();
+        config.session.session_prefix = "proj/".to_string();
+        assert_eq!(config.session.session_name_for("foo"), "proj/foo");
     }
 }
