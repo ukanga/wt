@@ -23,7 +23,7 @@ Git worktrees solve this—but the commands are verbose, cleanup is manual, and 
 ~/myrepo/.worktrees/bugfix/   # agent 3 fixing that bug
 ```
 
-**Session mode** manages all your agents in one tmux session with a live status dashboard showing which agents are active or idle.
+**Session mode** manages your agents in tmux, either as panes in one shared session or as separate per-worktree sessions.
 
 ## Installation
 
@@ -124,20 +124,39 @@ wt use [name]             Enter existing workspace
 wt ls                     Interactive workspace picker
 wt rm [name]              Remove workspace (interactive if no name)
 wt which                  Print current workspace name
-wt session                Attach to tmux session (see Session Mode)
-wt session ls             List workspaces in session (with agent status)
-wt session add <name>     Add workspace to session
+wt session [--mode M]     Enter tmux session(s) (see Session Mode)
+wt session [--mode M] ls  List workspaces in session
+wt session [--mode M] add <name>
       [-b base]           base: defaults to main
-      [--panes 2|3]       override pane count
-      [--watch]           add status window with live agent status
-wt session rm <name>      Remove workspace from session
-wt session watch [-i N]   Live status dashboard (or use --watch above)
+      [--panes 2|3]       override pane count (panes mode) / window count (windows mode)
+      [--watch]           add status window with live agent status (panes mode only)
+wt session [--mode M] rm <name>
+wt session [--mode M] watch [-i N]
 wt -d <dir> <cmd>         Custom worktree directory (default: .worktrees)
+
+wt new [<name>]                     Create workspace and enter it, name defaults to current branch
+     [-b <base>]                    Defaults to main
+     [--print-path]                 Output path only (for scripts)
+wt use <name>                       Enter existing workspace
+wt ls                               Interactive workspace picker
+wt rm <name>                        Remove workspace (interactive if no name)
+wt which                            Print current workspace name
+wt session [--mode M]               Enter tmux session(s) (see Session Mode)
+wt session [--mode M] ls            List workspaces in session
+wt session [--mode M] add <name>    Add a named session
+     [-b <base>]                    Defaults to main
+     [--panes 2|3]                  Override pane count (panes mode) / window count (windows mode)
+     [--watch]                      Add status window with live agent status (panes mode only)
+wt session [--mode M] rm <name>     Remove a named session
+wt session [--mode M] watch [-i N]  Watch all the sessions
+wt -d <dir> <cmd>                   Custom worktree directory (default: .worktrees)
+
+M = panes | windows
 ```
 
 ## Session Mode
 
-Manage multiple workspaces in a tmux session with dedicated panes for AI agents, terminal, and optionally an editor.
+Manage multiple workspaces in tmux with dedicated agent, terminal, and optional editor surfaces.
 
 ```bash
 # Add workspaces to session
@@ -146,35 +165,38 @@ $ wt session add feature/payments
 
 # List workspaces with agent status
 $ wt session ls
-* [0] feature/auth (active) [2 panes]    # agent running
-  [1] feature/payments (idle) [2 panes]   # agent at shell prompt
+* [0] feature/auth (active) [2 panes]    # panes mode
 
-# Attach to session (or switch if detached)
+# Or switch the whole invocation to windows mode
+$ wt session --mode windows add feature/review
+$ wt session --mode windows ls
+  wt-feature-review (agent: idle)
+
+# Enter the default panes session
 $ wt session
 
-# Remove workspace from session
+# Remove a panes-mode workspace
 $ wt session rm feature/auth
 
-# Commands work from inside the session too
-# (switches windows instead of attaching)
+# Enter or remove a windows-mode worktree session
+$ wt session --mode windows
+$ wt session --mode windows rm feature/review
 ```
 
-### Status Window
+`--mode` only affects the command it is passed to. Set `mode = "windows"`
+in config if you want windows mode to be the default for bare
+`wt session` commands.
 
-Use `--watch` to add a status window showing all workspaces and their agent status:
+### Layout Modes
 
-```bash
-wt session add feature/auth --watch
-```
+`wt` supports two tmux layouts.
 
-- `●` green = agent active (running a command)
-- `○` gray = agent idle (at shell prompt)
+#### Panes mode (default)
 
-Or run `wt session watch` manually in any pane.
+All worktrees live in one shared tmux session named `wt`, one window per
+worktree, split into 2 or 3 panes.
 
-### Pane Layouts
-
-**2 panes (default):**
+**2 panes:**
 ```
 +---------------------------+---------------------------+
 |                           |                           |
@@ -195,25 +217,64 @@ Or run `wt session watch` manually in any pane.
 +---------------------------+---------------------------+
 ```
 
+Use `--watch` to add a status window showing all workspaces and their agent status:
+
+```bash
+wt session add feature/auth --watch
+```
+
+- `●` green = agent active
+- `○` gray = agent idle
+
+Or run `wt session watch` manually in any pane.
+
+#### Windows mode
+
+Each worktree gets its own tmux session with one window per role. This is useful
+on narrow screens or when you prefer window navigation over pane navigation.
+
+- 2 windows: `agent`, `shell`
+- 3 windows: `agent`, `shell`, `edit`
+
+Session names default to `wt-<worktree>` and are configurable with
+`session_prefix`.
+
+Discovery in windows mode is state-backed: `wt` records sessions created via
+`wt session add` in `~/.wt/sessions.json`, and `wt session`, `wt session ls`, and
+`wt session rm` operate from that stored state. Stale entries are pruned when the
+corresponding tmux session no longer exists.
+
+Because discovery is state-backed, `session_prefix = ""` only changes naming. It
+does not cause `wt` to pick up unrelated tmux sessions.
+
+`wt session watch` and `--watch` are currently panes-mode only.
+
 ### Configuration
 
 Create `~/.wt/config.toml` for global settings or `.wt.toml` in repo root for per-repo settings:
 
 ```toml
 [session]
-panes = 2           # 2 or 3 (default: 2)
-agent_cmd = "claude"  # command for agent pane
-editor_cmd = "nvim"   # command for editor pane (when panes=3)
+mode = "panes"         # "panes" (default) or "windows"
+panes = 2              # 2 or 3; also used as window count in windows mode
+session_prefix = "wt-" # prepended to windows-mode session names
+agent_cmd = "claude"   # command for agent pane/window
+editor_cmd = "nvim"    # command for editor pane/window (when panes=3)
 ```
 
-Precedence: `--panes` flag > `.wt.toml` > `~/.wt/config.toml` > defaults
+Precedence: `--mode` / `--panes` flags > `.wt.toml` > `~/.wt/config.toml` > defaults
 
 ### Navigation
 
 Standard tmux keybindings:
 - `C-b` + arrow keys — switch panes
-- `C-b n` / `C-b p` — next/previous window
+- `C-b n` / `C-b p` — next/previous window in the current tmux session
 - `C-b d` — detach from session
+
+In windows mode, `C-b n` / `C-b p` only moves between the `agent`, `shell`,
+and `edit` windows for one worktree. To switch to a different worktree
+session, run `wt session --mode windows` again; from inside tmux, `wt` uses
+`switch-client` instead of nesting tmux sessions.
 
 ### Environment Variables
 
