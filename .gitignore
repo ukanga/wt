@@ -19,3 +19,6 @@ Cargo.lock
 # Test worktree directories
 ../wt-trees/
 .worktrees
+
+# Local workspace metadata
+.codex

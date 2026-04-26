@@ -25,6 +25,12 @@ fn setup_test_repo() -> (TempDir, PathBuf) {
     (temp_dir, repo_path)
 }
 
+fn kill_tmux_session(session_name: &str) {
+    let _ = Command::new("tmux")
+        .args(["kill-session", "-t", session_name])
+        .output();
+}
+
 #[test]
 #[ignore]
 fn test_tmux_session_lifecycle() {
@@ -38,9 +44,7 @@ fn test_tmux_session_lifecycle() {
     let (_temp_dir, repo_path) = setup_test_repo();
 
     // Cleanup any existing test session
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
 
     // Test session creation
     assert!(!tmux.session_exists().unwrap());
@@ -63,9 +67,7 @@ fn test_tmux_session_lifecycle() {
     assert_eq!(windows.len(), 1);
 
     // Cleanup
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
 }
 
 #[test]
@@ -81,9 +83,7 @@ fn test_tmux_pane_layout_2_panes() {
     let (_temp_dir, repo_path) = setup_test_repo();
 
     // Cleanup any existing test session
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
 
     let config = SessionConfig::default();
     tmux.create_session("test-window", &repo_path).unwrap();
@@ -94,9 +94,7 @@ fn test_tmux_pane_layout_2_panes() {
     assert_eq!(windows[0].pane_count, 2);
 
     // Cleanup
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
 }
 
 #[test]
@@ -112,9 +110,7 @@ fn test_tmux_pane_layout_3_panes() {
     let (_temp_dir, repo_path) = setup_test_repo();
 
     // Cleanup any existing test session
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
 
     let config = SessionConfig::default();
     tmux.create_session("test-window", &repo_path).unwrap();
@@ -125,9 +121,34 @@ fn test_tmux_pane_layout_3_panes() {
     assert_eq!(windows[0].pane_count, 3);
 
     // Cleanup
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session_name])
-        .output();
+    kill_tmux_session(session_name);
+}
+
+#[test]
+#[ignore]
+fn test_tmux_create_window_uses_next_free_index() {
+    if !TmuxManager::is_available() {
+        eprintln!("tmux not available, skipping test");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let session_name = format!("wt-test-next-window-{}", std::process::id());
+    let tmux = TmuxManager::new(&session_name);
+
+    kill_tmux_session(&session_name);
+
+    tmux.create_session("first-window", temp_dir.path())
+        .unwrap();
+    tmux.create_window("second-window", temp_dir.path())
+        .unwrap();
+
+    let windows = tmux.list_windows().unwrap();
+    assert_eq!(windows.len(), 2);
+    assert!(windows.iter().any(|window| window.name == "first-window"));
+    assert!(windows.iter().any(|window| window.name == "second-window"));
+
+    kill_tmux_session(&session_name);
 }
 
 #[test]
